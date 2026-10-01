@@ -121,6 +121,7 @@ A minimal, fast SQL client desktop application with AI-powered querying. Built f
 ### Database Monitoring
 
 - **Connection Health Monitor** - Dashboard with active queries, table sizes, cache hit ratios, and lock detection
+- **Schema Intel** - One-click read-only diagnostics for missing primary keys, unindexed foreign keys, duplicate indexes, bloat, and unused indexes with copyable SQL fixes (also available via `npx data-peek doctor`)
 - **PostgreSQL Notifications** - Subscribe to LISTEN/NOTIFY channels with real-time event log
 - **Kill Queries** - Terminate long-running or blocking queries from the health dashboard
 

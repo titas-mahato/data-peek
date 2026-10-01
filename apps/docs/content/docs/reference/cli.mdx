@@ -1,0 +1,56 @@
+---
+title: CLI Reference
+description: Command-line interface reference for data-peek — doctor diagnostics and headless tools
+---
+
+# CLI Reference
+
+data-peek includes command-line tools for running database diagnostics and headless audits directly from your terminal or CI/CD pipelines.
+
+## `doctor`
+
+Runs [Schema Intel](/docs/features/schema-intel) checks headlessly against a target database and outputs a formatted terminal report with findings, severities, and suggested SQL remediations.
+
+### Usage
+
+```bash
+npx data-peek doctor [options]
+```
+
+### Options
+
+| Flag | Short | Description | Default |
+| :--- | :---: | :--- | :--- |
+| `--connection <url>` | `-c` | Database connection URI (e.g. `postgres://...`) | Environment variable or active connection |
+| `--check <id...>` | | Run specific checks only (e.g. `--check tables_without_pk missing_fk_indexes`) | All supported checks |
+| `--severity <level>` | `-s` | Minimum severity to report: `critical`, `warning`, `info` | `info` |
+| `--format <format>` | `-f` | Output format: `pretty`, `json`, `markdown` | `pretty` |
+| `--fail-on <level>` | | Exit with non-zero status code if issues match or exceed severity | None |
+| `--help` | `-h` | Show help and available options | |
+
+### Examples
+
+#### Run all checks against PostgreSQL
+
+```bash
+npx data-peek doctor -c "postgres://postgres:postgres@localhost:5432/mydb"
+```
+
+#### Run in CI and fail on critical or warning issues
+
+```bash
+npx data-peek doctor -c "$DATABASE_URL" --fail-on warning --format markdown > schema-report.md
+```
+
+#### Run only specific checks
+
+```bash
+npx data-peek doctor -c "$DATABASE_URL" --check tables_without_pk missing_fk_indexes
+```
+
+---
+
+## Related
+
+- [Schema Intel](/docs/features/schema-intel) — GUI version with interactive filters and one-click editor tabs
+- [Health Monitor](/docs/features/health-monitor) — Live operational health and lock inspection

@@ -1,0 +1,141 @@
+---
+title: Schema Intel
+description: One-click read-only diagnostics for schema debt — missing primary keys, unindexed foreign keys, duplicate indexes, bloat, and unused indexes
+---
+
+# Schema Intel
+
+Schema Intel runs the diagnostic queries you keep meaning to write, groups the findings by severity, and hands you actionable SQL fixes.
+
+Every database that has been in production for more than a few months accumulates schema debt: a table created without a primary key, a foreign key column someone forgot to index, duplicate indexes left behind by older migrations, or autovacuum falling behind on high-churn tables. Instead of digging through a wiki of custom SQL snippets or memorizing catalog queries, Schema Intel runs a comprehensive battery of non-invasive diagnostics in under a second.
+
+## Opening Schema Intel
+
+Click **Schema Intel** in the sidebar (under the **Automation & Monitoring** group) or press `Cmd+K` / `Ctrl+K` and search for **Schema Intel**. It opens as a dedicated tab bound to your active connection.
+
+When opened for the first time on a connection, Schema Intel automatically runs all supported diagnostics for that database dialect.
+
+## Checks & Diagnostics
+
+Each check inspects system catalogs and metadata tables to identify specific structural risks or performance anti-patterns:
+
+### Critical
+
+#### Invalid Indexes (`invalid_indexes`)
+- **What it finds**: Indexes marked invalid (`indisvalid = false` in PostgreSQL), typically caused by a failed or cancelled `CREATE INDEX CONCURRENTLY` statement.
+- **Impact**: Invalid indexes consume disk space and slow down writes (INSERT/UPDATE/DELETE still update them), but the query planner will never use them for reads.
+- **Supported**: PostgreSQL
+- **Fix**: Drop the invalid index with `DROP INDEX CONCURRENTLY` and re-create it.
+
+---
+
+### Warning
+
+#### Tables Without a Primary Key (`tables_without_pk`)
+- **What it finds**: Base tables that have no primary key constraint defined.
+- **Impact**: Without a primary key, logical replication fails or requires full table scans, ORMs struggle with row identity, and inline row-level updates or deduplication become error-prone.
+- **Supported**: PostgreSQL, MySQL, SQL Server
+- **Fix**: `ALTER TABLE ... ADD PRIMARY KEY (...)` on a unique identity column or surrogate key.
+
+#### Missing Foreign Key Indexes (`missing_fk_indexes`)
+- **What it finds**: Foreign key columns that do not have a corresponding index covering the leading column.
+- **Impact**: Whenever a row in the parent table is deleted or its referenced key updated, the database must perform a full sequential scan on the child table to enforce referential integrity. Joins on unindexed foreign keys also suffer severe latency penalties.
+- **Supported**: PostgreSQL, MySQL
+- **Fix**: `CREATE INDEX CONCURRENTLY` on the foreign key column.
+
+#### Duplicate or Redundant Indexes (`duplicate_indexes`)
+- **What it finds**: Multiple indexes that cover identical column lists or where one index strictly duplicates the leading columns of another index with matching expressions.
+- **Impact**: Duplicate indexes waste disk space and shared buffer cache memory while adding pure overhead to every write operation.
+- **Supported**: PostgreSQL, MySQL
+- **Fix**: `DROP INDEX` on the redundant index after confirming no unique constraints rely on it.
+
+---
+
+### Info
+
+#### Unused Indexes (`unused_indexes`)
+- **What it finds**: Indexes that have recorded zero scans (`idx_scan = 0`) since statistics were last reset.
+- **Impact**: Indexes that never serve queries penalize write performance and inflate backup sizes without providing any read benefit.
+- **Supported**: PostgreSQL
+- **Fix**: Review query access patterns over a representative traffic window, then drop the index if it is genuinely unused.
+
+#### Bloated Tables (`bloated_tables`)
+- **What it finds**: Tables where dead tuples make up a disproportionate percentage of total table size, calculated via dead tuple statistics.
+- **Impact**: Bloat wastes disk space, degrades cache locality, and causes sequential scans to read empty pages.
+- **Supported**: PostgreSQL
+- **Fix**: Run `VACUUM (ANALYZE)` or schedule `VACUUM FULL` / `pg_repack` during an off-peak maintenance window.
+
+#### Never Vacuumed or Analyzed (`never_vacuumed`)
+- **What it finds**: Tables where `last_vacuum` and `last_autovacuum` are missing or where autovacuum has not analyzed the table in over 30 days.
+- **Impact**: Missing or outdated statistics prevent the cost-based query optimizer from selecting efficient join algorithms and index scans, leading to slow sequential scans.
+- **Supported**: PostgreSQL
+- **Fix**: Run `ANALYZE` or `VACUUM ANALYZE` on the flagged table.
+
+#### Nullable Foreign Keys (`nullable_fks`)
+- **What it finds**: Foreign key columns that do not have a `NOT NULL` constraint.
+- **Impact**: Allows rows to reference "nothing" without violating referential integrity. While sometimes intentional (optional relationships), nullable foreign keys are often an accidental omission that leads to orphaned records or awkward outer joins.
+- **Supported**: PostgreSQL, MySQL
+- **Fix**: Audit existing `NULL` rows and add a `NOT NULL` constraint if the association should be mandatory.
+
+---
+
+## Database Support Matrix
+
+| Diagnostic Check | Severity | PostgreSQL | MySQL | SQL Server | SQLite |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Tables without PK** | Warning | Yes | Yes | Yes | Planned |
+| **Missing FK indexes** | Warning | Yes | Yes | Planned | Planned |
+| **Duplicate indexes** | Warning | Yes | Yes | Planned | Planned |
+| **Unused indexes** | Info | Yes | Planned | Planned | Planned |
+| **Invalid indexes** | Critical | Yes | N/A | N/A | N/A |
+| **Bloated tables** | Info | Yes | Planned | Planned | Planned |
+| **Never vacuumed / analyzed** | Info | Yes | N/A | N/A | Planned |
+| **Nullable foreign keys** | Info | Yes | Yes | Planned | Planned |
+
+---
+
+## The "Run Fix" Flow
+
+When a check surfaces findings, Schema Intel provides mechanical remediation SQL:
+
+1. **Review Findings**: Each finding displays the target table or index name (`public.orders`, `customer_id`), a concise description, and an explanation of the underlying issue.
+2. **Preview Suggested SQL**: Click **Show fix** to inspect the suggested SQL statement.
+3. **Copy or Open in Editor**:
+   - **Copy**: Copies the SQL statement directly to your clipboard.
+   - **Open in new tab**: Spawns a new SQL query tab with the statement pre-loaded, where you can modify identifiers, add qualifiers, or run an `EXPLAIN` before executing.
+
+<Callout type="warn">
+  **Suggested SQL is a starting point, not a blind apply.**
+  
+  Always review suggested statements before applying them in production. For example, index creations in PostgreSQL default to `CREATE INDEX CONCURRENTLY` to avoid table locks, but you should verify index naming conventions, monitor concurrent lock queues, and evaluate business constraints (such as whether a foreign key is genuinely intended to allow `NULL`).
+</Callout>
+
+---
+
+## Safe & Read-Only by Construction
+
+Every query executed by Schema Intel is a read-only `SELECT` against database system catalogs (such as `pg_class`, `pg_stat_user_tables`, `sys.tables`, or `information_schema`).
+
+- **No mutating commands**: Schema Intel never runs `ALTER`, `CREATE`, `DROP`, `UPDATE`, or `ANALYZE`.
+- **No aggressive locks**: It never acquires locks stronger than `AccessShareLock`, ensuring that running diagnostics will never block ongoing production traffic.
+- **Clear permission handling**: If your database user lacks permission to query an administrative catalog (such as `pg_stat_user_indexes`), the check surfaces as **Skipped** with an explicit explanatory message rather than silently failing or falsely reporting a clean schema.
+
+---
+
+## Command-Line Version (`doctor`)
+
+You can also run Schema Intel headlessly from your terminal without opening the desktop GUI:
+
+```bash
+npx data-peek doctor --connection "postgres://user:password@localhost:5432/dbname"
+```
+
+The CLI runs the same catalog checks and outputs a color-coded terminal report with findings, severities, and suggested SQL fixes. See the [CLI Reference](/docs/reference/cli) for all options and flags.
+
+---
+
+## Related Features
+
+- [Health Monitor](/docs/features/health-monitor) — Real-time operational monitoring of active queries, table sizes, cache hit ratios, and locks
+- [Query Plans & EXPLAIN](/docs/features/query-plans) — Interactive execution plans and index recommendations for specific queries
+- [Table Designer](/docs/features/table-designer) — Visually modify schemas, add primary keys, and configure constraints
